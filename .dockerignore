@@ -1,0 +1,14 @@
+.git
+.gitignore
+.DS_Store
+node_modules
+npm-debug.log
+test
+k8s
+docs
+evidence
+scripts
+compose.yaml
+Dockerfile
+.dockerignore
+*.md

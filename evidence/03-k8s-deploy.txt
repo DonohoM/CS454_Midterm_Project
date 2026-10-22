@@ -1,0 +1,85 @@
+### Cluster location: single-node k3s inside the same Multipass VM  (2026-10-20 22:05:14 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get nodes -o wide
+NAME       STATUS   ROLES           AGE   VERSION        INTERNAL-IP     EXTERNAL-IP   OS-IMAGE             KERNEL-VERSION              CONTAINER-RUNTIME
+cs454-vm   Ready    control-plane   11s   v1.36.5+k3s1   192.168.252.4   <none>        Ubuntu 24.04.5 LTS   6.8.0-147-generic (arm64)   containerd://2.3.4-k3s1.36
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl version
+Client Version: v1.36.5+k3s1
+Kustomize Version: v5.8.1
+Server Version: v1.36.5+k3s1
+
+### Load the SAME image from Docker's store into k3s containerd  (2026-10-20 22:05:15 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ docker image ls cs454-midterm
+IMAGE                 ID             DISK USAGE   CONTENT SIZE   EXTRA
+cs454-midterm:1.0.0   1af027cc5226        218MB         54.1MB   U    
+
+ubuntu@cs454-vm:~/cs454-midterm$ sudo k3s crictl images | grep cs454 || echo 'not present in k3s containerd yet'
+not present in k3s containerd yet
+
+ubuntu@cs454-vm:~/cs454-midterm$ docker save cs454-midterm:1.0.0 | sudo k3s ctr images import - 2>&1 | tail -3
+docker.io/library/cs454 midterm:1.0.0   	saved	
+application/vnd.oci.image.index.v1+json sha256:1af027cc522640df7f68b4c980e601999b9b6faa206f5279c9a0f89d111b7b7a
+Importing	elapsed: 1.8 s	total:   0.0 B	(0.0 B/s)	
+
+ubuntu@cs454-vm:~/cs454-midterm$ sudo k3s crictl images | grep -E 'IMAGE|cs454'
+IMAGE                              TAG                 IMAGE ID            SIZE
+docker.io/library/cs454-midterm    1.0.0               68150b0eff014       54.1MB
+
+### Apply Deployment (2 replicas) and Service  (2026-10-20 22:05:23 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl apply -f k8s/
+deployment.apps/cs454-web created
+service/cs454-web created
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl rollout status deployment/cs454-web --timeout=90s
+Waiting for deployment "cs454-web" rollout to finish: 0 of 2 updated replicas are available...
+Waiting for deployment "cs454-web" rollout to finish: 1 of 2 updated replicas are available...
+deployment "cs454-web" successfully rolled out
+
+### Deployment, Pods, Service, EndpointSlice: two replicas ready  (2026-10-20 22:05:29 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get deployment cs454-web -o wide
+NAME        READY   UP-TO-DATE   AVAILABLE   AGE   CONTAINERS   IMAGES                SELECTOR
+cs454-web   2/2     2            2           7s    web          cs454-midterm:1.0.0   app=cs454-web
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get pods -l app=cs454-web -o wide --show-labels
+NAME                        READY   STATUS    RESTARTS   AGE   IP          NODE       NOMINATED NODE   READINESS GATES   LABELS
+cs454-web-dc55fc6cd-fwjfl   1/1     Running   0          7s    10.42.0.6   cs454-vm   <none>           <none>            app=cs454-web,pod-template-hash=dc55fc6cd
+cs454-web-dc55fc6cd-qrvmg   1/1     Running   0          7s    10.42.0.5   cs454-vm   <none>           <none>            app=cs454-web,pod-template-hash=dc55fc6cd
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get service cs454-web -o wide
+NAME        TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)   AGE   SELECTOR
+cs454-web   ClusterIP   10.43.72.144   <none>        80/TCP    7s    app=cs454-web
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get endpointslices -l kubernetes.io/service-name=cs454-web -o wide
+NAME              ADDRESSTYPE   PORTS   ENDPOINTS             AGE
+cs454-web-vfdqk   IPv4          8080    10.42.0.6,10.42.0.5   7s
+
+### Access method 1: kubectl port-forward to the Service (VM localhost:8081 -> svc port 80)  (2026-10-20 22:05:39 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl port-forward service/cs454-web 8081:80 >/tmp/pf.log 2>&1 & sleep 2; cat /tmp/pf.log; curl -s -i http://localhost:8081/health; echo; for i in 1 2 3 4; do curl -s http://localhost:8081/; echo; done; kill %1
+Forwarding from 127.0.0.1:8081 -> 8080
+Forwarding from [::1]:8081 -> 8080
+HTTP/1.1 200 OK
+Content-Type: application/json
+Date: Tue, 20 Oct 2026 22:05:41 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+
+{"status":"ok"}
+{"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fwjfl","requestCount":1}
+{"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fwjfl","requestCount":2}
+{"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fwjfl","requestCount":3}
+{"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fwjfl","requestCount":4}
+
+### Access method 2: in-cluster client Pod -> Service DNS name (http://cs454-web)  (2026-10-20 22:05:41 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl run client --rm -i --restart=Never --image=cs454-midterm:1.0.0 --image-pull-policy=Never --command -- node -e "(async()=>{for(let i=0;i<8;i++){const r=await fetch('http://cs454-web/',{headers:{connection:'close'}});console.log(r.status, await r.text())}})()" 2>&1 | grep -v 'pod "client" deleted'
+All commands and output from this session will be recorded in container logs, including credentials and sensitive information passed through the command prompt.
+If you don't see a command prompt, try pressing enter.
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qrvmg","requestCount":1}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qrvmg","requestCount":2}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qrvmg","requestCount":3}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qrvmg","requestCount":4}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qrvmg","requestCount":5}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fwjfl","requestCount":5}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qrvmg","requestCount":6}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fwjfl","requestCount":6}
+

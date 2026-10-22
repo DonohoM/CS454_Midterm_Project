@@ -1,0 +1,162 @@
+### Resource requests/limits and readiness probe as applied to the running Pods  (2026-10-20 22:11:01 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get pod -l app=cs454-web -o jsonpath='{range .items[*]}{.metadata.name}{"  qos="}{.status.qosClass}{"  resources="}{.spec.containers[0].resources}{"\n"}{end}'
+cs454-web-dc55fc6cd-fx78m  qos=Burstable  resources={"limits":{"cpu":"250m","memory":"128Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}
+cs454-web-dc55fc6cd-qq2b2  qos=Burstable  resources={"limits":{"cpu":"250m","memory":"128Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl describe pod -l app=cs454-web | grep -E '^Name:|Readiness:' 
+Name:             cs454-web-dc55fc6cd-fx78m
+    Readiness:  http-get http://:http/health delay=2s timeout=2s period=5s #success=1 #failure=2
+Name:             cs454-web-dc55fc6cd-qq2b2
+    Readiness:  http-get http://:http/health delay=2s timeout=2s period=5s #success=1 #failure=2
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl top pods -l app=cs454-web 2>&1
+NAME                        CPU(cores)   MEMORY(bytes)   
+cs454-web-dc55fc6cd-fx78m   3m           10Mi            
+cs454-web-dc55fc6cd-qq2b2   3m           10Mi            
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl describe node cs454-vm | sed -n '/Allocated resources/,/memory/p'
+Allocated resources:
+  (Total limits may be over 100 percent, i.e., overcommitted.)
+  Resource           Requests    Limits
+  --------           --------    ------
+  cpu                300m (15%)  500m (25%)
+  memory             268Mi (9%)  426Mi (14%)
+
+### BASELINE: both Pods Running and Ready; both endpoints ready=true  (2026-10-20 22:11:01 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get pods -l app=cs454-web -o wide
+NAME                        READY   STATUS    RESTARTS   AGE     IP           NODE       NOMINATED NODE   READINESS GATES
+cs454-web-dc55fc6cd-fx78m   1/1     Running   0          4m57s   10.42.0.9    cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qq2b2   1/1     Running   0          4m30s   10.42.0.11   cs454-vm   <none>           <none>
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get endpointslices -l kubernetes.io/service-name=cs454-web -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\t"}{.targetRef.name}{"\tready="}{.conditions.ready}{"\tserving="}{.conditions.serving}{"\n"}{end}'
+10.42.0.11	cs454-web-dc55fc6cd-qq2b2	ready=true	serving=true
+10.42.0.9	cs454-web-dc55fc6cd-fx78m	ready=true	serving=true
+
+ubuntu@cs454-vm:~/cs454-midterm$ scripts/svc-requests.sh 6
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":7}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":8}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fx78m","requestCount":12}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":9}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fx78m","requestCount":13}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fx78m","requestCount":14}
+
+### Why an application-level toggle: this cluster rejects patching a running Pod's readinessProbe  (2026-10-20 22:11:15 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl patch pod cs454-web-dc55fc6cd-fx78m --type json -p '[{"op":"replace","path":"/spec/containers/0/readinessProbe/httpGet/path","value":"/not-health"}]' 2>&1 | cut -c1-260
+The Pod "cs454-web-dc55fc6cd-fx78m" is invalid: spec: Forbidden: pod updates may not change fields other than `spec.containers[*].image`,`spec.initContainers[*].image`,`spec.activeDeadlineSeconds`,`spec.tolerations` (only additions to existing tolerations),`sp
+@@ -158,7 +158,7 @@
+    "ReadinessProbe": {
+     "Exec": null,
+     "HTTPGet": {
+-     "Path": "/health",
++     "Path": "/not-health",
+      "Port": "http",
+      "Host": "",
+      "Scheme": "HTTP",
+
+
+### FAILURE: create the toggle file in ONE Pod only (fx78m); Deployment template unchanged  (2026-10-20 22:11:16 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl exec cs454-web-dc55fc6cd-fx78m -- touch /tmp/not-ready
+
+ubuntu@cs454-vm:~/cs454-midterm$ sleep 12; kubectl get pods -l app=cs454-web -o wide
+NAME                        READY   STATUS    RESTARTS   AGE     IP           NODE       NOMINATED NODE   READINESS GATES
+cs454-web-dc55fc6cd-fx78m   0/1     Running   0          5m23s   10.42.0.9    cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qq2b2   1/1     Running   0          4m56s   10.42.0.11   cs454-vm   <none>           <none>
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get deploy cs454-web
+NAME        READY   UP-TO-DATE   AVAILABLE   AGE
+cs454-web   1/2     2            1           6m5s
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get endpointslices -l kubernetes.io/service-name=cs454-web -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\t"}{.targetRef.name}{"\tready="}{.conditions.ready}{"\tserving="}{.conditions.serving}{"\n"}{end}'
+10.42.0.11	cs454-web-dc55fc6cd-qq2b2	ready=true	serving=true
+10.42.0.9	cs454-web-dc55fc6cd-fx78m	ready=false	serving=false
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get endpointslices -l kubernetes.io/service-name=cs454-web -o wide
+NAME              ADDRESSTYPE   PORTS   ENDPOINTS              AGE
+cs454-web-vfdqk   IPv4          8080    10.42.0.11,10.42.0.9   6m6s
+
+### FAILURE: the NotReady Pod's process is still running and still serves /, only /health fails  (2026-10-20 22:11:29 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl exec cs454-web-dc55fc6cd-fx78m -- ps -o pid,etime,args
+PID   ELAPSED COMMAND
+    1  5:25   node src/server.js
+   20  0:01   ps -o pid,etime,args
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl exec cs454-web-dc55fc6cd-fx78m -- wget -S -q -O - http://127.0.0.1:8080/health 2>&1; echo
+  HTTP/1.1 503 Service Unavailable
+wget: server returned error: HTTP/1.1 503 Service Unavailable
+command terminated with exit code 1
+
+
+ubuntu@cs454-vm:~/cs454-midterm$ curl -s http://10.42.0.9:8080/; echo '   <- direct Pod request (bypasses Service)'
+{"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fx78m","requestCount":15}   <- direct Pod request (bypasses Service)
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl describe pod cs454-web-dc55fc6cd-fx78m | sed -n '/^Conditions:/,/^Volumes:/p;/^Events:/,$p' | grep -v '^Volumes:'
+Conditions:
+  Type                        Status
+  PodReadyToStartContainers   True 
+  Initialized                 True 
+  Ready                       False 
+  ContainersReady             False 
+  PodScheduled                True 
+Events:
+  Type     Reason     Age              From               Message
+  ----     ------     ----             ----               -------
+  Normal   Scheduled  5m24s            default-scheduler  Successfully assigned default/cs454-web-dc55fc6cd-fx78m to cs454-vm
+  Normal   Pulled     5m24s            kubelet            spec.containers{web}: Container image "cs454-midterm:1.0.0" already present on machine and can be accessed by the pod
+  Normal   Created    5m24s            kubelet            spec.containers{web}: Container created
+  Normal   Started    5m24s            kubelet            spec.containers{web}: Container started
+  Warning  Unhealthy  3s (x3 over 8s)  kubelet            spec.containers{web}: Readiness probe failed: HTTP probe failed with statuscode: 503
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl logs cs454-web-dc55fc6cd-fx78m --tail 3
+{"method":"GET","path":"/health","status":503}
+{"method":"GET","path":"/health","status":503}
+{"method":"GET","path":"/","status":200}
+
+### FAILURE: in-cluster requests through the Service reach ONLY the Ready Pod (qq2b2)  (2026-10-20 22:11:30 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ scripts/svc-requests.sh 8
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":10}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":11}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":12}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":13}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":14}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":15}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":16}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":17}
+
+### RECOVERY: remove the toggle file; same Pod, same process, no restart  (2026-10-20 22:11:42 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl exec cs454-web-dc55fc6cd-fx78m -- rm /tmp/not-ready
+
+ubuntu@cs454-vm:~/cs454-midterm$ sleep 7; kubectl get pods -l app=cs454-web -o wide
+NAME                        READY   STATUS    RESTARTS   AGE     IP           NODE       NOMINATED NODE   READINESS GATES
+cs454-web-dc55fc6cd-fx78m   1/1     Running   0          5m45s   10.42.0.9    cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qq2b2   1/1     Running   0          5m18s   10.42.0.11   cs454-vm   <none>           <none>
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get deploy cs454-web
+NAME        READY   UP-TO-DATE   AVAILABLE   AGE
+cs454-web   2/2     2            2           6m27s
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get endpointslices -l kubernetes.io/service-name=cs454-web -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\t"}{.targetRef.name}{"\tready="}{.conditions.ready}{"\tserving="}{.conditions.serving}{"\n"}{end}'
+10.42.0.11	cs454-web-dc55fc6cd-qq2b2	ready=true	serving=true
+10.42.0.9	cs454-web-dc55fc6cd-fx78m	ready=true	serving=true
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl exec cs454-web-dc55fc6cd-fx78m -- ps -o pid,etime,args | head -2
+PID   ELAPSED COMMAND
+    1  5:46   node src/server.js
+
+ubuntu@cs454-vm:~/cs454-midterm$ scripts/svc-requests.sh 8
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":18}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":19}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fx78m","requestCount":16}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":20}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":21}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":22}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":23}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":24}
+
+### Restore check: no temporary changes remain  (2026-10-20 22:11:53 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl exec cs454-web-dc55fc6cd-fx78m -- ls /tmp/not-ready 2>&1; true
+ls: /tmp/not-ready: No such file or directory
+command terminated with exit code 1
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl diff -f k8s/ >/dev/null && echo 'live objects match k8s/ manifests (kubectl diff: no changes)'
+live objects match k8s/ manifests (kubectl diff: no changes)
+

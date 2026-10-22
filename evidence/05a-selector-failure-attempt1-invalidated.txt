@@ -1,0 +1,59 @@
+NOTE: This first attempt at Part 4 is kept for transparency but was INVALIDATED and repeated in
+05-selector-failure.txt. The port-forward started in Part 3 (03-k8s-deploy.txt) had not actually
+stopped ('kill %1' does not work in a non-interactive shell), so it still held VM port 8081 and was
+pinned to Pod cs454-web-dc55fc6cd-fwjfl, which was deleted in Part 3's replacement test. The baseline
+port-forward below therefore failed. The shared log file shows the new session's bind error interleaved
+with the old session's error after its Pod was deleted:
+
+    Unable to listen on port 8081: Listeners failed to create with the following errors: [unable to create listener: Error listen tcp4 127.0.0.1:8081: bind: address already in use unable to create listener: Error listen tcpHandling connection for 8081
+    E1020 17:07:00.921778   13016 portforward.go:522] "Unhandled Error" err="an error occurred forwarding 8081 -> 8080: error forwarding port 8080 to pod 11399cd5e1b7eaf8178310cab39731b5afa8cba77cdbcf25e3bbb0be67e698ee, uid : network namespace for sandbox \"11399cd5e1b7eaf8178310cab39731b5afa8cba77cdbcf25e3bbb0be67e698ee\" is closed"
+    error: lost connection to pod
+
+This shows that a port-forward session is pinned to one Pod and does not follow the Service to a replacement Pod.
+The selector was restored with 'kubectl apply -f k8s/service.yaml' before the clean repeat.
+
+==================================================================================
+
+### BASELINE: selector matches Pod labels, endpoints populated, requests succeed  (2026-10-20 22:06:56 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get svc cs454-web -o jsonpath='{.spec.selector}'; echo
+{"app":"cs454-web"}
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get pods -l app=cs454-web --show-labels
+NAME                        READY   STATUS    RESTARTS   AGE   LABELS
+cs454-web-dc55fc6cd-fx78m   1/1     Running   0          51s   app=cs454-web,pod-template-hash=dc55fc6cd
+cs454-web-dc55fc6cd-qq2b2   1/1     Running   0          24s   app=cs454-web,pod-template-hash=dc55fc6cd
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get endpointslices -l kubernetes.io/service-name=cs454-web
+NAME              ADDRESSTYPE   PORTS   ENDPOINTS              AGE
+cs454-web-vfdqk   IPv4          8080    10.42.0.9,10.42.0.11   93s
+
+ubuntu@cs454-vm:~/cs454-midterm$ scripts/svc-requests.sh 3
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qq2b2","requestCount":1}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fx78m","requestCount":4}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fx78m","requestCount":5}
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl port-forward service/cs454-web 8081:80 >/tmp/pf.log 2>&1 & sleep 2; curl -s http://localhost:8081/; echo; kill %1
+
+bash: line 1: kill: %1: no such job
+
+### CHANGE: Service selector app=cs454-web -> app=cs454-web-broken (Deployment untouched)  (2026-10-20 22:07:00 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl patch service cs454-web --type merge -p '{"spec":{"selector":{"app":"cs454-web-broken"}}}'
+service/cs454-web patched
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get svc cs454-web -o jsonpath='{.spec.selector}'; echo
+{"app":"cs454-web-broken"}
+
+### SYMPTOM seen by clients (new sessions started after the change)  (2026-10-20 22:07:01 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ scripts/svc-requests.sh 3
+ERROR ECONNREFUSED
+ERROR ECONNREFUSED
+ERROR ECONNREFUSED
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl port-forward service/cs454-web 8081:80; echo exit=$?
+error: timed out waiting for the condition
+exit=1
+
+ubuntu@cs454-vm:~/cs454-midterm$ curl -sS -m 3 http://localhost:8081/; echo exit=$?
+curl: (7) Failed to connect to localhost port 8081 after 0 ms: Couldn't connect to server
+exit=7
+

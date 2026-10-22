@@ -1,0 +1,47 @@
+### VM environment  (2026-10-20 22:03:13 UTC)
+host$ multipass info cs454-vm
+Name:           cs454-vm
+State:          Running
+Snapshots:      0
+IPv4:           192.168.252.4
+                172.17.0.1
+Release:        Ubuntu 24.04.5 LTS
+Image hash:     50e24e1fb79e (Ubuntu 24.04 LTS)
+CPU(s):         2
+Load:           0.73 0.26 0.09
+Disk usage:     2.4GiB out of 14.5GiB
+Memory usage:   284.7MiB out of 2.9GiB
+Mounts:         --
+
+### VM OS, Docker versions  (2026-10-20 22:03:13 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ uname -a
+Linux cs454-vm 6.8.0-147-generic #147-Ubuntu SMP PREEMPT_DYNAMIC Thu Sep 24 11:39:52 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+
+ubuntu@cs454-vm:~/cs454-midterm$ docker version --format 'Client {{.Client.Version}} / Server {{.Server.Version}}'
+Client 29.9.2 / Server 29.9.2
+
+ubuntu@cs454-vm:~/cs454-midterm$ docker compose version
+Docker Compose version v5.6.0
+
+### Build image with Compose (build: . / image: cs454-midterm:1.0.0)  (2026-10-20 22:03:13 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ docker compose build --progress=plain 2>&1 | tail -15
+#10 exporting to image
+#10 exporting layers 0.1s done
+#10 exporting manifest sha256:0e34f8d04ee4781bd2af6152f366663dd3f400a754c3a471ff15359ac1438715
+#10 exporting manifest sha256:0e34f8d04ee4781bd2af6152f366663dd3f400a754c3a471ff15359ac1438715 done
+#10 exporting config sha256:68150b0eff01428162bbf182921735381fbc615211c4b4cb9c004c56c59f726a done
+#10 exporting attestation manifest sha256:ce4a658a17524cffc2b0ae9afb5139120f9c34d61bb5588e779fd66841cdb493 0.0s done
+#10 exporting manifest list sha256:1af027cc522640df7f68b4c980e601999b9b6faa206f5279c9a0f89d111b7b7a done
+#10 naming to docker.io/library/cs454-midterm:1.0.0 done
+#10 unpacking to docker.io/library/cs454-midterm:1.0.0
+#10 unpacking to docker.io/library/cs454-midterm:1.0.0 0.8s done
+#10 DONE 0.9s
+
+#11 resolving provenance for metadata file
+#11 DONE 0.0s
+ Image cs454-midterm:1.0.0 Built 
+
+ubuntu@cs454-vm:~/cs454-midterm$ docker image ls cs454-midterm
+IMAGE                 ID             DISK USAGE   CONTENT SIZE   EXTRA
+cs454-midterm:1.0.0   1af027cc5226        218MB         54.1MB        
+

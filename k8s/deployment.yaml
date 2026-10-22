@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cs454-web
+  labels:
+    app: cs454-web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cs454-web
+  template:
+    metadata:
+      labels:
+        app: cs454-web
+    spec:
+      containers:
+        - name: web
+          # Same image built for Compose; imported into k3s containerd (see README).
+          image: cs454-midterm:1.0.0
+          # Never pull: the image exists only in the node's local image store.
+          imagePullPolicy: Never
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: PORT
+              value: "8080"
+            - name: SERVICE_NAME
+              value: "cs454-midterm-k8s"
+            - name: MESSAGE
+              value: "Hello from Kubernetes (k3s)"
+            # CS554 readiness toggle: /health returns 503 while this file exists.
+            - name: NOT_READY_FILE
+              value: "/tmp/not-ready"
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "250m"
+              memory: "128Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+            successThreshold: 1

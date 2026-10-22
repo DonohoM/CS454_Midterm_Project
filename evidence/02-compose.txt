@@ -1,0 +1,144 @@
+### Start the Compose service  (2026-10-20 22:03:46 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ docker compose up -d 2>&1
+ Network cs454-midterm_default Creating 
+ Network cs454-midterm_default Creating 
+ Network cs454-midterm_default Created 
+ Network cs454-midterm_default Created 
+ Container cs454-midterm-web-1 Creating 
+ Container cs454-midterm-web-1 Created 
+ Container cs454-midterm-web-1 Starting 
+ Container cs454-midterm-web-1 Started 
+
+ubuntu@cs454-vm:~/cs454-midterm$ sleep 8; docker compose ps
+NAME                  IMAGE                 COMMAND                  SERVICE   CREATED         STATUS                   PORTS
+cs454-midterm-web-1   cs454-midterm:1.0.0   "docker-entrypoint.s…"   web       9 seconds ago   Up 8 seconds (healthy)   0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp
+
+### Requests from INSIDE the VM (localhost:8080)  (2026-10-20 22:03:55 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ curl -s -i http://localhost:8080/health; echo
+HTTP/1.1 200 OK
+Content-Type: application/json
+Date: Tue, 20 Oct 2026 22:03:55 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+
+{"status":"ok"}
+
+ubuntu@cs454-vm:~/cs454-midterm$ for i in 1 2 3; do curl -s http://localhost:8080/; echo; done
+{"service":"cs454-midterm-compose","message":"Hello from Docker Compose inside the Multipass VM","hostname":"295a0125c83c","requestCount":1}
+{"service":"cs454-midterm-compose","message":"Hello from Docker Compose inside the Multipass VM","hostname":"295a0125c83c","requestCount":2}
+{"service":"cs454-midterm-compose","message":"Hello from Docker Compose inside the Multipass VM","hostname":"295a0125c83c","requestCount":3}
+
+### VM network addresses and the published port listening on all VM interfaces  (2026-10-20 22:03:55 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ ip -4 -brief addr show enp0s1
+enp0s1           UP             192.168.252.4/24 metric 100 
+
+ubuntu@cs454-vm:~/cs454-midterm$ sudo ss -ltnp 'sport = :8080'
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess                                
+LISTEN 0      4096         0.0.0.0:8080      0.0.0.0:*    users:(("docker-proxy",pid=8520,fd=8))
+LISTEN 0      4096            [::]:8080         [::]:*    users:(("docker-proxy",pid=8526,fd=8))
+
+### Request from the macOS HOST to the VM's address (192.168.252.4:8080)  (2026-10-20 22:03:55 UTC)
+host$ ifconfig bridge100 | grep 'inet '
+	inet 192.168.252.1 netmask 0xffffff00 broadcast 192.168.252.255
+
+host$ curl -s -i http://192.168.252.4:8080/health; echo
+HTTP/1.1 200 OK
+Content-Type: application/json
+Date: Tue, 20 Oct 2026 22:03:55 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+Transfer-Encoding: chunked
+
+{"status":"ok"}
+
+host$ curl -s http://192.168.252.4:8080/; echo
+{"service":"cs454-midterm-compose","message":"Hello from Docker Compose inside the Multipass VM","hostname":"295a0125c83c","requestCount":4}
+
+host$ BASE_URL=http://192.168.252.4:8080 bash test/smoke.sh
+{"status":"ok"}
+{"service":"cs454-midterm-compose","message":"Hello from Docker Compose inside the Multipass VM","hostname":"295a0125c83c","requestCount":5}
+
+### Container address on the Compose bridge network  (2026-10-20 22:04:02 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}} hostname={{.Config.Hostname}}' cs454-midterm-web-1
+172.18.0.2 hostname=295a0125c83c
+
+ubuntu@cs454-vm:~/cs454-midterm$ sudo iptables -t nat -S DOCKER | grep 8080
+-A DOCKER ! -i br-0589de434458 -p tcp -m tcp --dport 8080 -j DNAT --to-destination 172.18.0.2:8080
+
+### Service status and container logs  (2026-10-20 22:04:03 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ docker compose ps
+NAME                  IMAGE                 COMMAND                  SERVICE   CREATED          STATUS                    PORTS
+cs454-midterm-web-1   cs454-midterm:1.0.0   "docker-entrypoint.s…"   web       17 seconds ago   Up 16 seconds (healthy)   0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp
+
+ubuntu@cs454-vm:~/cs454-midterm$ docker compose logs --no-log-prefix web
+Listening on port 8080
+{"method":"GET","path":"/health","status":200}
+{"method":"GET","path":"/health","status":200}
+{"method":"GET","path":"/","status":200}
+{"method":"GET","path":"/","status":200}
+{"method":"GET","path":"/","status":200}
+{"method":"GET","path":"/health","status":200}
+{"method":"GET","path":"/","status":200}
+{"method":"GET","path":"/health","status":200}
+{"method":"GET","path":"/","status":200}
+{"method":"GET","path":"/health","status":200}
+
+### Restart the service and observe the process-local counter  (2026-10-20 22:04:03 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ curl -s http://localhost:8080/; echo
+{"service":"cs454-midterm-compose","message":"Hello from Docker Compose inside the Multipass VM","hostname":"295a0125c83c","requestCount":6}
+
+ubuntu@cs454-vm:~/cs454-midterm$ docker compose restart web 2>&1
+ Container cs454-midterm-web-1 Restarting 
+ Container cs454-midterm-web-1 Started 
+
+ubuntu@cs454-vm:~/cs454-midterm$ sleep 3; docker compose ps
+NAME                  IMAGE                 COMMAND                  SERVICE   CREATED          STATUS                            PORTS
+cs454-midterm-web-1   cs454-midterm:1.0.0   "docker-entrypoint.s…"   web       21 seconds ago   Up 3 seconds (health: starting)   0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp
+
+ubuntu@cs454-vm:~/cs454-midterm$ curl -s http://localhost:8080/; echo
+{"service":"cs454-midterm-compose","message":"Hello from Docker Compose inside the Multipass VM","hostname":"295a0125c83c","requestCount":1}
+
+ubuntu@cs454-vm:~/cs454-midterm$ curl -s http://localhost:8080/; echo
+{"service":"cs454-midterm-compose","message":"Hello from Docker Compose inside the Multipass VM","hostname":"295a0125c83c","requestCount":2}
+
+ubuntu@cs454-vm:~/cs454-midterm$ docker compose logs --no-log-prefix --tail 8 web
+{"method":"GET","path":"/health","status":200}
+{"method":"GET","path":"/","status":200}
+{"method":"GET","path":"/health","status":200}
+{"method":"GET","path":"/","status":200}
+Received SIGTERM; stopping.
+Listening on port 8080
+{"method":"GET","path":"/","status":200}
+{"method":"GET","path":"/","status":200}
+
+### Recreate the container (down/up) for comparison  (2026-10-20 22:04:07 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ docker compose down 2>&1
+ Container cs454-midterm-web-1 Stopping 
+ Container cs454-midterm-web-1 Stopped 
+ Container cs454-midterm-web-1 Removing 
+ Container cs454-midterm-web-1 Removed 
+ Network cs454-midterm_default Removing 
+ Network cs454-midterm_default Removed 
+
+ubuntu@cs454-vm:~/cs454-midterm$ docker compose up -d 2>&1 | tail -2
+ Container cs454-midterm-web-1 Starting 
+ Container cs454-midterm-web-1 Started 
+
+ubuntu@cs454-vm:~/cs454-midterm$ sleep 3; curl -s http://localhost:8080/; echo
+{"service":"cs454-midterm-compose","message":"Hello from Docker Compose inside the Multipass VM","hostname":"91cdf5e53727","requestCount":1}
+
+ubuntu@cs454-vm:~/cs454-midterm$ docker compose ps
+NAME                  IMAGE                 COMMAND                  SERVICE   CREATED         STATUS                            PORTS
+cs454-midterm-web-1   cs454-midterm:1.0.0   "docker-entrypoint.s…"   web       3 seconds ago   Up 3 seconds (health: starting)   0.0.0.0:8080->8080/tcp, [::]:8080->8080/tcp
+
+### Extra: kill the node process from the VM (restart: unless-stopped)  (2026-10-20 22:04:21 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ docker inspect -f 'pid={{.State.Pid}} restarts={{.RestartCount}}' cs454-midterm-web-1
+pid=9904 restarts=0
+
+ubuntu@cs454-vm:~/cs454-midterm$ sudo kill -9 $(docker inspect -f '{{.State.Pid}}' cs454-midterm-web-1); sleep 3; docker inspect -f 'pid={{.State.Pid}} restarts={{.RestartCount}} status={{.State.Status}}' cs454-midterm-web-1
+pid=10294 restarts=1 status=running
+
+ubuntu@cs454-vm:~/cs454-midterm$ curl -s http://localhost:8080/; echo
+{"service":"cs454-midterm-compose","message":"Hello from Docker Compose inside the Multipass VM","hostname":"91cdf5e53727","requestCount":1}
+

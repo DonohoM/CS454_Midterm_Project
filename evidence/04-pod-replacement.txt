@@ -1,0 +1,88 @@
+### Before: two ready replicas  (2026-10-20 22:06:04 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get deploy,rs -l app=cs454-web
+NAME                        READY   UP-TO-DATE   AVAILABLE   AGE
+deployment.apps/cs454-web   2/2     2            2           42s
+
+NAME                                  DESIRED   CURRENT   READY   AGE
+replicaset.apps/cs454-web-dc55fc6cd   2         2         2       42s
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get pods -l app=cs454-web -o wide
+NAME                        READY   STATUS    RESTARTS   AGE   IP          NODE       NOMINATED NODE   READINESS GATES
+cs454-web-dc55fc6cd-fwjfl   1/1     Running   0          42s   10.42.0.6   cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qrvmg   1/1     Running   0          42s   10.42.0.5   cs454-vm   <none>           <none>
+
+### Delete one Pod while spec.replicas is still 2 (watch running in background)  (2026-10-20 22:06:05 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ (kubectl get pods -l app=cs454-web --watch-only -o wide > /tmp/watch.log 2>&1 &) ; kubectl delete pod cs454-web-dc55fc6cd-fwjfl --wait=false; sleep 1; kubectl get pods -l app=cs454-web -o wide; sleep 8; pkill -f 'get pods -l app=cs454-web --watch-only'; echo '--- watch output ---'; cat /tmp/watch.log
+pod "cs454-web-dc55fc6cd-fwjfl" deleted from default namespace
+NAME                        READY   STATUS    RESTARTS   AGE   IP          NODE       NOMINATED NODE   READINESS GATES
+cs454-web-dc55fc6cd-fx78m   0/1     Running   0          1s    10.42.0.9   cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qrvmg   1/1     Running   0          43s   10.42.0.5   cs454-vm   <none>           <none>
+
+[Note: the remainder of this command line produced no output because the pkill pattern also matched
+ the shell running the command and terminated it. The snapshot above (taken 1 s after the delete)
+ shows the replacement Pod cs454-web-dc55fc6cd-fx78m already created and Running but not yet Ready (0/1).
+ The deletion is repeated below with a working watch.]
+
+### After: back to two ready replicas (one new Pod name)  (2026-10-20 22:06:14 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get deploy cs454-web
+NAME        READY   UP-TO-DATE   AVAILABLE   AGE
+cs454-web   2/2     2            2           51s
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get pods -l app=cs454-web -o wide
+NAME                        READY   STATUS    RESTARTS   AGE   IP          NODE       NOMINATED NODE   READINESS GATES
+cs454-web-dc55fc6cd-fx78m   1/1     Running   0          10s   10.42.0.9   cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qrvmg   1/1     Running   0          52s   10.42.0.5   cs454-vm   <none>           <none>
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get endpointslices -l kubernetes.io/service-name=cs454-web
+NAME              ADDRESSTYPE   PORTS   ENDPOINTS             AGE
+cs454-web-vfdqk   IPv4          8080    10.42.0.5,10.42.0.9   52s
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl describe rs -l app=cs454-web | sed -n '/^Events:/,$p'
+Events:
+  Type    Reason            Age   From                   Message
+  ----    ------            ----  ----                   -------
+  Normal  SuccessfulCreate  52s   replicaset-controller  Created pod: cs454-web-dc55fc6cd-qrvmg
+  Normal  SuccessfulCreate  52s   replicaset-controller  Created pod: cs454-web-dc55fc6cd-fwjfl
+  Normal  SuccessfulCreate  10s   replicaset-controller  Created pod: cs454-web-dc55fc6cd-fx78m
+
+ubuntu@cs454-vm:~/cs454-midterm$ scripts/svc-requests.sh 6
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qrvmg","requestCount":8}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qrvmg","requestCount":9}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fx78m","requestCount":1}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fx78m","requestCount":2}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-fx78m","requestCount":3}
+200 {"service":"cs454-midterm-k8s","message":"Hello from Kubernetes (k3s)","hostname":"cs454-web-dc55fc6cd-qrvmg","requestCount":10}
+
+### Repeat: delete Pod qrvmg with a 12-second watch of Pod changes  (2026-10-20 22:06:31 UTC)
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get pods -l app=cs454-web
+NAME                        READY   STATUS    RESTARTS   AGE
+cs454-web-dc55fc6cd-fx78m   1/1     Running   0          27s
+cs454-web-dc55fc6cd-qrvmg   1/1     Running   0          69s
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl delete pod cs454-web-dc55fc6cd-qrvmg --wait=false; timeout 12 kubectl get pods -l app=cs454-web --watch -o wide; true
+pod "cs454-web-dc55fc6cd-qrvmg" deleted from default namespace
+NAME                        READY   STATUS              RESTARTS   AGE   IP          NODE       NOMINATED NODE   READINESS GATES
+cs454-web-dc55fc6cd-fx78m   1/1     Running             0          27s   10.42.0.9   cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qq2b2   0/1     ContainerCreating   0          0s    <none>      cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qrvmg   1/1     Terminating         0          69s   10.42.0.5   cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qrvmg   0/1     Completed           0          69s   10.42.0.5   cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qq2b2   0/1     ContainerCreating   0          0s    <none>      cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qq2b2   0/1     Running             0          0s    10.42.0.11   cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qrvmg   0/1     Completed           0          70s   10.42.0.5    cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qrvmg   0/1     Completed           0          70s   10.42.0.5    cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qrvmg   0/1     Completed           0          70s   10.42.0.5    cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qq2b2   1/1     Running             0          6s    10.42.0.11   cs454-vm   <none>           <none>
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get deploy cs454-web
+NAME        READY   UP-TO-DATE   AVAILABLE   AGE
+cs454-web   2/2     2            2           81s
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get pods -l app=cs454-web -o wide
+NAME                        READY   STATUS    RESTARTS   AGE   IP           NODE       NOMINATED NODE   READINESS GATES
+cs454-web-dc55fc6cd-fx78m   1/1     Running   0          39s   10.42.0.9    cs454-vm   <none>           <none>
+cs454-web-dc55fc6cd-qq2b2   1/1     Running   0          12s   10.42.0.11   cs454-vm   <none>           <none>
+
+ubuntu@cs454-vm:~/cs454-midterm$ kubectl get endpointslices -l kubernetes.io/service-name=cs454-web
+NAME              ADDRESSTYPE   PORTS   ENDPOINTS              AGE
+cs454-web-vfdqk   IPv4          8080    10.42.0.9,10.42.0.11   81s
+
